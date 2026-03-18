@@ -2,19 +2,21 @@ import streamlit as st
 import pandas as pd
 import io
 
-# 엑셀 다운로드를 위한 변환 함수
-def to_excel(df):
+# 다중 시트 엑셀 다운로드를 위한 변환 함수
+def to_excel_multi_sheet(df_dict):
     output = io.BytesIO()
     # openpyxl 엔진을 사용하여 엑셀 작성
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Sheet1')
+        for sheet_name, df in df_dict.items():
+            # 데이터프레임이 비어있지 않거나, 비어있어도 헤더를 남기기 위해 그대로 저장
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
     processed_data = output.getvalue()
     return processed_data
 
 # 페이지 기본 설정
 st.set_page_config(page_title="지원장학 요청서 자동 분석기", layout="wide")
 st.title("📊 지원장학 요청서 자동 분석 및 유목화 웹앱")
-st.markdown("지원장학 요청서를 업로드하면 지정된 셀에서 데이터를 추출하고, 키워드 기반 유목화 후 각각 엑셀로 다운로드할 수 있습니다.")
+st.markdown("지원장학 요청서를 업로드하면 지정된 셀에서 데이터를 추출하고, 키워드 기반 유목화 및 부서 요청사항을 하나의 엑셀 파일(여러 시트)로 통합하여 다운로드합니다.")
 
 # 파일 업로더
 uploaded_files = st.file_uploader("장학 요청서 파일(Excel 또는 CSV)을 업로드하세요.", type=['xlsx', 'csv'], accept_multiple_files=True)
@@ -33,6 +35,15 @@ if st.button("분석 시작") and uploaded_files:
         "교육과정 및 학사 운영": ["교과", "학점제", "평가", "성적", "교육과정", "자유학기", "수업", "디지털", "코딩"],
         "생활지도 및 학생 지원": ["폭력", "학폭", "상담", "정서", "위기", "징계", "출결", "다문화"],
         "기타(미분류)": []
+    }
+
+    # 부서 매핑 사전
+    dept_mapping = {
+        "시설 및 환경 개선": "교육재정상담과(또는 교육시설과)",
+        "예산 및 행정 지원": "행정지원국(행정지원과)",
+        "교육과정 및 학사 운영": "교육지원국(중등교육과)",
+        "생활지도 및 학생 지원": "학생학부모지원센터(또는 학교통합지원센터)",
+        "기타(미분류)": "관련 부서 확인 필요"
     }
 
     st.success(f"총 {len(uploaded_files)}개의 파일을 분석합니다...")
@@ -116,54 +127,55 @@ if st.button("분석 시작") and uploaded_files:
     df_request = pd.DataFrame(request_list)
     df_categorized = pd.DataFrame(categorized_list)
 
-    # --- 결과 출력 및 엑셀 다운로드 버튼 ---
-    st.divider()
-    st.subheader("📁 데이터 추출 및 다운로드")
-    
-    col1, col2, col3, col4 = st.columns(4)
+    # 부서 요청 사항 데이터프레임 생성
+    dept_request_list = []
+    for item in categorized_list:
+        category = item["유목화 주제"]
+        target_dept = dept_mapping.get(category, "관련 부서 확인 필요")
+        dept_request_list.append({
+            "유목화 주제": category,
+            "담당 부서": target_dept,
+            "학교명": item["학교명"],
+            "구분": item["구분"],
+            "요청 및 건의 내용": f"{item['내용']}에 대한 구체적인 지원 방안 검토 요망"
+        })
+    df_dept_request = pd.DataFrame(dept_request_list)
 
-    with col1:
-        st.markdown("**[1] 방문 일정 및 담당자**")
-        st.dataframe(df_schedule, hide_index=True)
-        if not df_schedule.empty:
-            st.download_button("📥 일시 엑셀 다운로드", data=to_excel(df_schedule), file_name="방문일정_정리.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    with col2:
-        st.markdown("**[2] 학교 현안문제**")
-        st.dataframe(df_issue, hide_index=True)
-        if not df_issue.empty:
-            st.download_button("📥 현안문제 엑셀 다운로드", data=to_excel(df_issue), file_name="현안문제_정리.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    with col3:
-        st.markdown("**[3] 교육활동 지원 요청**")
-        st.dataframe(df_request, hide_index=True)
-        if not df_request.empty:
-            st.download_button("📥 요청사항 엑셀 다운로드", data=to_excel(df_request), file_name="지원요청_정리.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    with col4:
-        st.markdown("**[4] 키워드 유목화 결과**")
-        st.dataframe(df_categorized, hide_index=True)
-        if not df_categorized.empty:
-            st.download_button("📥 유목화 엑셀 다운로드", data=to_excel(df_categorized), file_name="유목화_정리.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    # --- 부서 요청사항 요약 출력 ---
-    st.divider()
-    st.subheader("🏢 부서별 조치 요청 사항 요약 (웹 확인용)")
-    
-    dept_mapping = {
-        "시설 및 환경 개선": "교육재정상담과(또는 교육시설과)",
-        "예산 및 행정 지원": "행정지원국(행정지원과)",
-        "교육과정 및 학사 운영": "교육지원국(중등교육과)",
-        "생활지도 및 학생 지원": "학생학부모지원센터(또는 학교통합지원센터)",
-        "기타(미분류)": "관련 부서 확인 필요"
+    # 엑셀 파일 생성을 위한 딕셔너리 매핑 (시트명 : 데이터프레임)
+    excel_sheets = {
+        "1_방문일정": df_schedule,
+        "2_학교현안문제": df_issue,
+        "3_지원요청사항": df_request,
+        "4_키워드유목화": df_categorized,
+        "5_부서조치요청": df_dept_request
     }
 
-    if not df_categorized.empty:
-        for category in categories.keys():
-            # 해당 카테고리만 필터링
-            filtered_df = df_categorized[df_categorized["유목화 주제"] == category]
-            if not filtered_df.empty:
-                target_dept = dept_mapping[category]
-                st.warning(f"**[{category} - {target_dept} 요청 사항]**")
-                for _, row in filtered_df.iterrows():
-                    st.write(f"- {row['내용']} ({row['학교명']})에 대한 구체적인 지원 방안 검토 요망")
+    # --- 화면 출력 및 단일 통합 엑셀 다운로드 ---
+    st.divider()
+    
+    col_title, col_btn = st.columns([3, 1])
+    with col_title:
+        st.subheader("📁 데이터 추출 결과 및 통합 다운로드")
+    with col_btn:
+        # 단일 통합 다운로드 버튼
+        st.download_button(
+            label="📥 통합 엑셀 파일 다운로드 (전체 시트 포함)", 
+            data=to_excel_multi_sheet(excel_sheets), 
+            file_name="지원장학_요청서_통합분석결과.xlsx", 
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+
+    # 탭을 사용하여 화면을 깔끔하게 구성 (데이터 미리보기)
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["방문 일정", "현안 문제", "지원 요청", "유목화 결과", "부서 조치 요청"])
+    
+    with tab1:
+        st.dataframe(df_schedule, use_container_width=True, hide_index=True)
+    with tab2:
+        st.dataframe(df_issue, use_container_width=True, hide_index=True)
+    with tab3:
+        st.dataframe(df_request, use_container_width=True, hide_index=True)
+    with tab4:
+        st.dataframe(df_categorized, use_container_width=True, hide_index=True)
+    with tab5:
+        st.dataframe(df_dept_request, use_container_width=True, hide_index=True)
